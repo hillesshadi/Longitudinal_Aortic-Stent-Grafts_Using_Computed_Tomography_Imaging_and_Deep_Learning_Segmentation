@@ -1,4 +1,39 @@
-# Longitudinal_Aortic-Stent-Grafts_Using_Computed_Tomography_Imaging_and_Deep_Learning_Segmentation
-This study presents a comprehensive computational pipeline for automated longitudinal analysis of aortic stent-grafts using CT imaging and deep learning segmentation via the nnU-Net framework. The pipeline integrates preprocessing, image enhancement evaluation, dual-structure segmentation, multi-metric evaluation, cross-dataset spatial overlap analysis, centroid-based displacement quantification, and multi-modal 2D and 3D visualization into a cohesive analytical workflow applicable to post-EVAR surveillance CT data.
-Segmentation performance across three longitudinal CT datasets (DSC: 0.0824-0.2273; HD95: 36.50-40.60 mm) remains substantially below clinically acceptable thresholds, primarily due to training data scarcity and metallic beam-hardening artifacts inherent to the single-patient study design. Notwithstanding these limitations, the pipeline successfully characterized a directional pattern of progressive stent-graft positional divergence, evidenced by declining cross-dataset DSC values (0.1004 to 0.0076) and craniocaudally dominant centroid displacement consistent with known post-EVAR migration trajectories.
-The 3D PyVista visualization framework provides clinically interpretable, geometrically grounded representations of segmentation quality and temporal device displacement that meaningfully augment standard radiological review. The pipeline establishes a rigorous, reproducible quantitative foundation for future longitudinal post-EVAR CT analysis, and identifies the key prerequisites—multi-centre dataset expansion, metal artifact reduction, and deformable image registration—that must be addressed before clinical translation.
+# Automated Longitudinal Pipeline for Aortic Stent-Graft AnalysisProject 
+## Overview
+This repository hosts a comprehensive computational pipeline designed for the automated longitudinal analysis of aortic stent-grafts using CT imaging. Developed within a deep learning framework (nnU-Net), the workflow enables precise tracking of device positioning and displacement over multiple post-EVAR (Endovascular Aneurysm Repair) surveillance intervals.
+## Key Features
+### Automated Segmentation: 
+Implementation of a dual-structure segmentation pipeline for the aorta and intimal flaps/stents.
+### Advanced Preprocessing: 
+Integration of image enhancement evaluation and denoising protocols.
+### Displacement Quantification: 
+A centroid-based analytical engine that calculates spatial divergence and directional migration trajectories ($x, y, z$ coordinates).
+### 3D Visualization: 
+A clinically interpretable visualization framework using PyVista, providing geometrically grounded 3D representations of temporal device displacement.
+### Multi-Metric Validation: 
+Rigorous evaluation using Dice Similarity Coefficient (DSC), Hausdorff Distance (HD95), and cross-dataset spatial overlap analysis.
+## Current Research Findings
+In its current iteration, the study identifies critical challenges in automated post-EVAR surveillance:
+### Performance Metrics: 
+Current segmentation performance (DSC: 0.0824–0.2273) highlights the impact of training data scarcity and metallic beam-hardening artifacts typical in single-patient longitudinal studies.
+### Migration Patterns: 
+Despite artifact limitations, the pipeline successfully characterized progressive stent-graft positional divergence. Results showed a decline in cross-dataset DSC (0.1004 to 0.0076) and a craniocaudally dominant displacement consistent with established clinical migration patterns.
+### Clinical Utility: 
+The 3D visualization framework meaningfully augments standard radiological reviews by providing a spatial context that 2D slices cannot offer.
+## Technical Stack
+### Framework: 
+nnU-Net (Deep Learning Segmentation)
+### Processing: 
+Python, SimpleITK, Nibabel, Pydicom
+### Visualization: 
+PyVista (3D), Matplotlib (2D)
+### Data Handling: 
+Excel-based quantification of longitudinal displacement values.
+## Roadmap for Clinical Translation
+To bridge the gap to clinical-grade accuracy, future development focuses on:
+### Multi-centre Dataset Expansion 
+to improve model generalization.
+### Metal Artifact Reduction (MAR) 
+algorithms to mitigate beam-hardening effects.
+### Deformable Image Registration 
+to enhance longitudinal tracking precision.
