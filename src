@@ -1,0 +1,324 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import pydicom
+import cv2
+from skimage import morphology, measure, filters
+from scipy import ndimage
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+class AttentionBlock(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        super(AttentionBlock, self).__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+        
+        self.relu = nn.ReLU(inplace=True)
+    
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi
+
+class AttentionUNet(nn.Module):
+    def __init__(self, in_channels=1, out_channels=1):
+        super(AttentionUNet, self).__init__()
+        
+        # Encoder
+        self.conv1 = self._block(in_channels, 64)
+        self.conv2 = self._block(64, 128)
+        self.conv3 = self._block(128, 256)
+        self.conv4 = self._block(256, 512)
+        self.conv5 = self._block(512, 1024)
+        
+        # Decoder with attention
+        self.up6 = nn.ConvTranspose2d(1024, 512, 2, stride=2)
+        self.att6 = AttentionBlock(F_g=512, F_l=512, F_int=256)
+        self.conv6 = self._block(1024, 512)
+        
+        self.up7 = nn.ConvTranspose2d(512, 256, 2, stride=2)
+        self.att7 = AttentionBlock(F_g=256, F_l=256, F_int=128)
+        self.conv7 = self._block(512, 256)
+        
+        self.up8 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.att8 = AttentionBlock(F_g=128, F_l=128, F_int=64)
+        self.conv8 = self._block(256, 128)
+        
+        self.up9 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.att9 = AttentionBlock(F_g=64, F_l=64, F_int=32)
+        self.conv9 = self._block(128, 64)
+        
+        self.final = nn.Conv2d(64, out_channels, kernel_size=1)
+        
+        self.pool = nn.MaxPool2d(2)
+    
+    def _block(self, in_channels, features):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, features, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x):
+        # Encoder
+        c1 = self.conv1(x)
+        p1 = self.pool(c1)
+        
+        c2 = self.conv2(p1)
+        p2 = self.pool(c2)
+        
+        c3 = self.conv3(p2)
+        p3 = self.pool(c3)
+        
+        c4 = self.conv4(p3)
+        p4 = self.pool(c4)
+        
+        c5 = self.conv5(p4)
+        
+        # Decoder with attention
+        u6 = self.up6(c5)
+        a6 = self.att6(g=u6, x=c4)
+        u6 = torch.cat([u6, a6], dim=1)
+        c6 = self.conv6(u6)
+        
+        u7 = self.up7(c6)
+        a7 = self.att7(g=u7, x=c3)
+        u7 = torch.cat([u7, a7], dim=1)
+        c7 = self.conv7(u7)
+        
+        u8 = self.up8(c7)
+        a8 = self.att8(g=u8, x=c2)
+        u8 = torch.cat([u8, a8], dim=1)
+        c8 = self.conv8(u8)
+        
+        u9 = self.up9(c8)
+        a9 = self.att9(g=u9, x=c1)
+        u9 = torch.cat([u9, a9], dim=1)
+        c9 = self.conv9(u9)
+        
+        output = self.final(c9)
+        return torch.sigmoid(output)
+
+class StentPreprocessor:
+    def __init__(self):
+        self.stent_hu_range = (2000, 4000)  # Stent typically has very high HU values
+        
+    def load_dicom_series(self, folder_path):
+        """Load DICOM series from folder"""
+        dicom_files = []
+        for file in sorted(os.listdir(folder_path)):
+            if file.endswith('.dcm'):
+                dicom_files.append(pydicom.dcmread(os.path.join(folder_path, file)))
+        
+        # Sort by slice location
+        dicom_files.sort(key=lambda x: float(x.ImagePositionPatient[2]))
+        
+        volume = np.stack([d.pixel_array.astype(np.float32) for d in dicom_files])
+        
+        # Convert to Hounsfield units
+        intercept = dicom_files[0].RescaleIntercept if hasattr(dicom_files[0], 'RescaleIntercept') else 0
+        slope = dicom_files[0].RescaleSlope if hasattr(dicom_files[0], 'RescaleSlope') else 1
+        volume = volume * slope + intercept
+        
+        # Get spacing information
+        spacing = (
+            float(dicom_files[0].PixelSpacing[0]),
+            float(dicom_files[0].PixelSpacing[1]),
+            float(dicom_files[1].ImagePositionPatient[2] - dicom_files[0].ImagePositionPatient[2]) if len(dicom_files) > 1 else 1.0
+        )
+        
+        return volume, spacing
+    
+    def window_clamp(self, volume, window_center, window_width):
+        """Apply windowing to enhance contrast"""
+        min_val = window_center - window_width // 2
+        max_val = window_center + window_width // 2
+        return np.clip(volume, min_val, max_val)
+    
+    def enhance_stent_contrast(self, slice_img):
+        """Enhance stent visibility using multiple techniques"""
+        # Normalize to 0-255
+        img_norm = cv2.normalize(slice_img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(img_norm)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(enhanced, (3,3), 0)
+        
+        # Edge enhancement using Laplacian
+        laplacian = cv2.Laplacian(blurred, cv2.CV_8U)
+        enhanced_edges = cv2.addWeighted(blurred, 1.0, laplacian, 0.3, 0)
+        
+        return enhanced_edges
+    
+    def create_stent_mask(self, volume):
+        """Create initial stent mask using thresholding and morphology"""
+        # High threshold for metal (stent)
+        stent_mask = volume > 2000  # Very high HU for metal
+        
+        # Remove small noise
+        stent_mask = morphology.remove_small_objects(stent_mask, min_size=10)
+        
+        # Morphological operations to clean up
+        stent_mask = morphology.binary_closing(stent_mask, morphology.ball(2))
+        stent_mask = morphology.binary_opening(stent_mask, morphology.ball(1))
+        
+        return stent_mask.astype(np.uint8)
+    
+    def augment_slice(self, slice_img, mask):
+        """Data augmentation for training"""
+        # Random rotation
+        angle = np.random.uniform(-15, 15)
+        h, w = slice_img.shape
+        center = (w//2, h//2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        
+        rotated_img = cv2.warpAffine(slice_img, M, (w, h))
+        rotated_mask = cv2.warpAffine(mask, M, (w, h))
+        
+        # Random flip
+        if np.random.random() > 0.5:
+            rotated_img = cv2.flip(rotated_img, 1)
+            rotated_mask = cv2.flip(rotated_mask, 1)
+        
+        # Random brightness/contrast adjustment
+        alpha = np.random.uniform(0.8, 1.2)  # contrast
+        beta = np.random.uniform(-20, 20)    # brightness
+        rotated_img = cv2.convertScaleAbs(rotated_img, alpha=alpha, beta=beta)
+        
+        return rotated_img, rotated_mask
+
+class StentMetrics:
+    @staticmethod
+    def dice_coefficient(pred, target):
+        """Calculate Dice coefficient"""
+        smooth = 1e-6
+        pred_flat = pred.flatten()
+        target_flat = target.flatten()
+        intersection = (pred_flat * target_flat).sum()
+        return (2. * intersection + smooth) / (pred_flat.sum() + target_flat.sum() + smooth)
+    
+    @staticmethod
+    def calculate_displacement(mask1, mask2, spacing=(1.0, 1.0, 1.0)):
+        """Calculate stent displacement between two masks"""
+        # Get centroids
+        def get_centroid(mask):
+            coords = np.where(mask > 0)
+            if len(coords[0]) == 0:
+                return np.array([np.nan, np.nan, np.nan])
+            return np.array([
+                np.mean(coords[0]) * spacing[0],
+                np.mean(coords[1]) * spacing[1], 
+                np.mean(coords[2]) * spacing[2]
+            ])
+        
+        cent1 = get_centroid(mask1)
+        cent2 = get_centroid(mask2)
+        
+        if np.isnan(cent1).any() or np.isnan(cent2).any():
+            return np.nan
+        
+        displacement = np.linalg.norm(cent2 - cent1)
+        return displacement, cent1, cent2
+    
+    @staticmethod
+    def calculate_statistics(displacements):
+        """Calculate statistical metrics"""
+        displacements = np.array(displacements)
+        displacements = displacements[~np.isnan(displacements)]
+        
+        if len(displacements) == 0:
+            return {}
+        
+        return {
+            'mean': np.mean(displacements),
+            'median': np.median(displacements),
+            'std': np.std(displacements),
+            'var': np.var(displacements),
+            'min': np.min(displacements),
+            'max': np.max(displacements),
+            'q25': np.percentile(displacements, 25),
+            'q75': np.percentile(displacements, 75)
+        }
+
+class StentVisualizer:
+    @staticmethod
+    def visualize_3d_structure(volume, mask, title="3D Stent Structure"):
+        """Create 3D visualization of stent structure"""
+        fig = plt.figure(figsize=(12, 8))
+        
+        # Extract stent surface points
+        stent_points = np.where(mask > 0)
+        
+        if len(stent_points[0]) > 0:
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # Sample points for visualization (to avoid overcrowding)
+            sample_rate = max(1, len(stent_points[0]) // 10000)
+            x = stent_points[0][::sample_rate]
+            y = stent_points[1][::sample_rate] 
+            z = stent_points[2][::sample_rate]
+            
+            ax.scatter(x, y, z, c='red', alpha=0.6, s=1)
+            ax.set_xlabel('X (voxels)')
+            ax.set_ylabel('Y (voxels)')
+            ax.set_zlabel('Z (slices)')
+            ax.set_title(title)
+            
+            # Set aspect ratio
+            ax.set_box_aspect([1,1,mask.shape[2]/mask.shape[0]])
+            
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def visualize_slices_with_masks(volume, mask, slice_indices=None):
+        """Visualize slices with overlayed masks"""
+        if slice_indices is None:
+            # Select slices with stent
+            stent_slices = np.where(mask.sum(axis=(0,1)) > 0)[0]
+            if len(stent_slices) > 0:
+                slice_indices = np.linspace(stent_slices[0], stent_slices[-1], 6, dtype=int)
+            else:
+                slice_indices = np.linspace(0, volume.shape[2]-1, 6, dtype=int)
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        axes = axes.flatten()
+        
+        for i, slice_idx in enumerate(slice_indices):
+            if i >= 6:
+                break
+                
+            slice_img = volume[:, :, slice_idx]
+            slice_mask = mask[:, :, slice_idx]
+            
+            # Normalize slice for display
+            slice_display = cv2.normalize(slice_img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            
+            axes[i].imshow(slice_display, cmap='gray')
+            axes[i].imshow(slice_mask, alpha=0.4, cmap='jet')
+            axes[i].set_title(f'Slice {slice_idx}')
+            axes[i].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
